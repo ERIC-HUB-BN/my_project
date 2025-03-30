@@ -14,4 +14,5 @@ RUN pip install -r requirements.txt
 COPY . /app/
 
 # 設定容器啟動時執行的命令
-CMD ["python", "app.py"]
+CMD ["pytest", "tests/"]
+
