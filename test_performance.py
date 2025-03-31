@@ -1,5 +1,7 @@
 import time
 import pytest
+import my_project  
+
 
 
 @pytest.mark.benchmark
