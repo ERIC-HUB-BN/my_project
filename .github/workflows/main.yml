@@ -1,4 +1,12 @@
-  upload_coverage:
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test_and_analysis:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -12,7 +20,7 @@
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run tests with coverage
+      - name: Run tests
         run: pytest --cov=my_project --cov-report=xml
 
       - name: Upload coverage to Codecov
@@ -20,3 +28,24 @@
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           file: ./coverage.xml
+
+      - name: Run static analysis (flake8 & pylint)
+        run: |
+          pip install flake8 pylint
+          flake8 . --max-line-length=100
+          pylint my_project
+
+      - name: Run performance tests
+        run: pytest --benchmark-only
+
+  docker_test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t my_project .
+
+      - name: Run tests inside Docker
+        run: docker run my_project pytest --cov=my_project --cov-report=xml --cov-report=term
