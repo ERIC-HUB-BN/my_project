@@ -1,6 +1,7 @@
 import time
 import pytest
 
+
 @pytest.mark.benchmark
 def test_function_speed(benchmark):
     def slow_function():
