@@ -2,5 +2,6 @@ numpy
 pandas
 requests
 pymongo
-pytest==6.2.5  # 這行是新增的
+pytest==6.2.5pytest --version
+  # 這行是新增的
 pytest-benchmark

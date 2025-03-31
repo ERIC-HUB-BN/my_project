@@ -16,3 +16,6 @@ COPY . /app/
 # 設定容器啟動時執行的命令
 CMD ["pytest", "tests/"]
 
+RUN pip install pytest pytest-cov
+
+
