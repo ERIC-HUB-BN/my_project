@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest pytest-cov
+          pip install flake8
 
       - name: Run tests
         run: pytest --cov=my_project --cov-report=xml
