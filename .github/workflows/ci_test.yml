@@ -25,4 +25,8 @@ jobs:
       - name: Run a test script
         run: |
           echo "Testing GitHub Actions Workflow"
+<<<<<<< HEAD
           python -c "print('GitHub Actions is running correctly!')"
+=======
+          python -c "print('GitHub Actions is running correctly!')"
+>>>>>>> 85f88b8d08a9978ad6a1befd078f6c87d2ac1c43
