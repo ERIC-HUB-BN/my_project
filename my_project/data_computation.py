@@ -1,6 +1,8 @@
-import websocket
+import asyncio
+import websockets
 import json
 import logging
+from collections import defaultdict
 
 # Logger setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -9,46 +11,61 @@ class DataComputationService:
     def __init__(self, spot_stream_url, perp_stream_url):
         self.spot_stream_url = spot_stream_url
         self.perp_stream_url = perp_stream_url
+        self.prices = defaultdict(dict)  # 用於存儲 Spot 和 Perp 的實時價格
 
-    def on_message(self, ws, message):
-        data = json.loads(message)
-        symbol = data.get("s")  # Trading pair symbol
-        price = data.get("c")  # Last price
-        if symbol and price:
-            logging.info(f"Received price update: {symbol} -> {price}")
+    async def fetch_spot_data(self):
+        async with websockets.connect(self.spot_stream_url) as ws:
+            logging.info("Connected to Spot WebSocket")
+            while True:
+                try:
+                    message = await ws.recv()
+                    data = json.loads(message)
+                    symbol = data.get("s")  # 交易對
+                    price = float(data.get("c"))  # 最新價格
+                    if symbol and price:
+                        self.prices[symbol]['spot'] = price
+                        logging.info(f"Spot Price Update: {symbol} -> {price}")
+                except Exception as e:
+                    logging.error(f"Error in Spot WebSocket: {e}")
+                    break
 
-    def on_error(self, ws, error):
-        logging.error(f"WebSocket error: {error}")
+    async def fetch_perp_data(self):
+        async with websockets.connect(self.perp_stream_url) as ws:
+            logging.info("Connected to Perp WebSocket")
+            while True:
+                try:
+                    message = await ws.recv()
+                    data = json.loads(message)
+                    symbol = data.get("s")  # 交易對
+                    price = float(data.get("c"))  # 最新價格
+                    if symbol and price:
+                        self.prices[symbol]['perp'] = price
+                        logging.info(f"Perp Price Update: {symbol} -> {price}")
+                except Exception as e:
+                    logging.error(f"Error in Perp WebSocket: {e}")
+                    break
 
-    def on_close(self, ws, close_status_code, close_msg):
-        logging.info("WebSocket connection closed")
+    async def calculate_price_difference(self):
+        while True:
+            await asyncio.sleep(10)  # 每10秒進行一次價差計算
+            for symbol, data in self.prices.items():
+                spot_price = data.get('spot')
+                perp_price = data.get('perp')
+                if spot_price and perp_price:
+                    difference = (perp_price - spot_price) / spot_price
+                    if difference > 0.0035:  # 價差大於 0.35%
+                        logging.info(f"Opportunity Found: {symbol} -> Perp > Spot by {difference:.2%}")
 
-    def on_open(self, ws):
-        logging.info("WebSocket connection established")
-
-    def start(self):
-        # Connect to Spot WebSocket stream
-        logging.info("Connecting to Spot WebSocket...")
-        spot_ws = websocket.WebSocketApp(
-            self.spot_stream_url,
-            on_message=self.on_message,
-            on_error=self.on_error,
-            on_close=self.on_close
+    async def run(self):
+        # 同時運行 Spot 和 Perp 的數據抓取，以及價差計算
+        await asyncio.gather(
+            self.fetch_spot_data(),
+            self.fetch_perp_data(),
+            self.calculate_price_difference()
         )
-        spot_ws.run_forever()
-
-        # Connect to Perp WebSocket stream (this will be done in parallel in the future)
-        logging.info("Connecting to Perp WebSocket...")
-        perp_ws = websocket.WebSocketApp(
-            self.perp_stream_url,
-            on_message=self.on_message,
-            on_error=self.on_error,
-            on_close=self.on_close
-        )
-        perp_ws.run_forever()
 
 if __name__ == "__main__":
-    spot_stream = "wss://stream.binance.com:9443/ws/spot_ticker"  # Example Spot WebSocket URL
-    perp_stream = "wss://fstream.binance.com/ws/perp_ticker"  # Example Perp WebSocket URL
+    spot_stream = "wss://stream.binance.com:9443/ws/btcusdt@ticker"  # Spot WebSocket URL
+    perp_stream = "wss://fstream.binance.com/ws/btcusdt@ticker"  # Perp WebSocket URL
     service = DataComputationService(spot_stream, perp_stream)
-    service.start()
+    asyncio.run(service.run())
