@@ -40,6 +40,6 @@ jobs:
         run: pytest --benchmark-only
 
       - name: Clean up
-         run:|
-         find . -type d -name "__pycache__" -exec rm -rf {} +
-         find . -type f -name "*.pyc" -delete
+        run: |
+          find . -type d -name "__pycache__" -exec rm -rf {} +
+          find . -type f -name "*.pyc" -delete
