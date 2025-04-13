@@ -59,6 +59,7 @@ class DataComputationService:
                             f"Opportunity Found: {symbol} -> Perp > Spot by {difference:.2%}"
                         )
 
+
     async def run(self):
         # 同時運行 Spot 和 Perp 的數據抓取，以及價差計算
         await asyncio.gather(
@@ -66,6 +67,7 @@ class DataComputationService:
             self.fetch_perp_data(),
             self.calculate_price_difference()
         )
+
 
 if __name__ == "__main__":
     spot_stream = "wss://stream.binance.com:9443/ws/btcusdt@ticker"  # Spot WebSocket URL
