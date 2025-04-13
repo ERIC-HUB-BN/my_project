@@ -1,0 +1,28 @@
+name: CI Test Workflow
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  test-run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+      
+      - name: Install dependencies
+        run: |
+          echo "No dependencies to install for basic test"
+
+      - name: Run a test script
+        run: |
+          echo "Testing GitHub Actions Workflow"
+          python -c "print('GitHub Actions is running correctly!')"
