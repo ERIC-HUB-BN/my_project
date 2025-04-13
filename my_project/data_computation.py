@@ -7,6 +7,7 @@ from collections import defaultdict
 # Logger setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
+
 class DataComputationService:
     def __init__(self, spot_stream_url, perp_stream_url):
         self.spot_stream_url = spot_stream_url
@@ -54,7 +55,9 @@ class DataComputationService:
                 if spot_price and perp_price:
                     difference = (perp_price - spot_price) / spot_price
                     if difference > 0.0035:  # 價差大於 0.35%
-                        logging.info(f"Opportunity Found: {symbol} -> Perp > Spot by {difference:.2%}")
+                        logging.info(
+                            f"Opportunity Found: {symbol} -> Perp > Spot by {difference:.2%}"
+                        )
 
     async def run(self):
         # 同時運行 Spot 和 Perp 的數據抓取，以及價差計算

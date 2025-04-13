@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 from my_project.data_computation import DataComputationService
 import asyncio
 
+
 class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # 初始化測試對象
@@ -46,6 +47,3 @@ class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
         tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         [task.cancel() for task in tasks]
         await asyncio.gather(*tasks, return_exceptions=True)
-
-if __name__ == "__main__":
-    unittest.main()
