@@ -6,6 +6,7 @@ calculates price differences, and logs trading opportunities.
 import json
 import logging
 from collections import defaultdict
+import asyncio  # 修正：添加 asyncio 的導入
 
 import websockets
 
@@ -111,4 +112,4 @@ if __name__ == "__main__":
     SPOT_STREAM = "wss://stream.binance.com:9443/ws/btcusdt@ticker"  # Spot WebSocket URL
     PERP_STREAM = "wss://fstream.binance.com/ws/btcusdt@ticker"  # Perp WebSocket URL
     service = DataComputationService(SPOT_STREAM, PERP_STREAM)
-    asyncio.run(service.run())
+    asyncio.run(service.run())  # 修正：asyncio 導入後不再報錯
