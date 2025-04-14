@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 import asyncio
 import sys
 import os
-import websockets  #  E262: 確保註解前和 # 後都有空格
+import websockets  # E262: 修正 - 確保 # 後有空格
 
 # --- 重要：設定主程式碼的路徑 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -125,6 +125,7 @@ class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
         print("--- End Captured Logs ---")
 
         # 斷言日誌包含預期的錯誤訊息
+        # F541: 修正 - 移除不必要的 f (Line 130 in previous error)
         self.assertTrue(
             any("WebSocket connection closed for BTCUSDT (spot)" in entry for entry in log.output),
             "Expected 'WebSocket connection closed' log not found"
@@ -139,9 +140,8 @@ class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
         """
         mock_ws = AsyncMock()
         mock_connect.return_value.__aenter__.return_value = mock_ws
-        # --- 語法錯誤修正點 ---
-        invalid_json = 'THIS IS NOT JSON'  # 確保字串是完整的
-        # --- 修正結束 ---
+        invalid_json = 'THIS IS NOT JSON'
+        # E262: 修正 - 確保 # 後有空格
         mock_ws.recv = AsyncMock(side_effect=[invalid_json])  #  主程式會在 json.loads 時出錯
 
         with self.assertLogs(level='ERROR') as log:
@@ -149,8 +149,10 @@ class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
 
         print("\n--- Captured Logs for test_fetch_data_with_json_decode_error ---")
         for i, entry in enumerate(log.output):
-            print(f"Log[{i}]: {entry}")  # E111/E117: 確保縮排正確
+            # E111/E117: 修正縮排 (對齊 for 迴圈內的 print)
+            print(f"Log[{i}]: {entry}")
         print("--- End Captured Logs ---")
+        # F541: 修正 - 移除不必要的 f (Line 155 in previous error)
         self.assertTrue(
             any("JSON decoding error for BTCUSDT (spot)" in entry for entry in log.output),
             "Expected JSON decode error log not found"
