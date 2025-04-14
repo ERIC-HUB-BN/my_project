@@ -1,0 +1,9 @@
+[MESSAGES CONTROL]
+# Disable specific messages by code
+# C0304: Final newline missing
+# C0114: Missing module docstring
+# C0115: Missing class docstring
+# C0116: Missing function or method docstring
+# W1203: Use lazy % formatting in logging functions
+# W0718: Catching too general exception Exception
+disable=C0304,C0114,C0115,C0116,W1203,W0718
