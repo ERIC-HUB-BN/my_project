@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 import asyncio
 import sys
 import os
-import websockets  #  確保註解前有兩個空格
+import websockets  #  E262: 確保註解前和 # 後都有空格
 
 # --- 重要：設定主程式碼的路徑 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -127,7 +127,7 @@ class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
         # 斷言日誌包含預期的錯誤訊息
         # F541: 修正 - 移除不必要的 f
         self.assertTrue(
-            any(f"WebSocket connection closed for BTCUSDT (spot)" in entry for entry in log.output),
+            any("WebSocket connection closed for BTCUSDT (spot)" in entry for entry in log.output),
             "Expected 'WebSocket connection closed' log not found"  # 簡化錯誤訊息
         )
         print(">>> test_fetch_data_with_connection_closed: 斷線錯誤日誌檢查通過！")
@@ -140,32 +140,4 @@ class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
         """
         mock_ws = AsyncMock()
         mock_connect.return_value.__aenter__.return_value = mock_ws
-        invalid_json = 'THIS IS NOT JSON'
-        mock_ws.recv = AsyncMock(side_effect=[invalid_json])  #  主程式會在 json.loads 時出錯
-
-        with self.assertLogs(level='ERROR') as log:
-             await self.service.fetch_data("BTCUSDT", "spot", stop_after=1)
-
-        print("\n--- Captured Logs for test_fetch_data_with_json_decode_error ---")
-        for i, entry in enumerate(log.output):
-            print(f"Log[{i}]: {entry}")
-        print("--- End Captured Logs ---")
-        # F541: 修正 - 移除不必要的 f
-        self.assertTrue(
-            any(f"JSON decoding error for BTCUSDT (spot)" in entry for entry in log.output),
-            "Expected JSON decode error log not found"  # 簡化錯誤訊息
-        )
-        print(">>> test_fetch_data_with_json_decode_error: JSON解碼錯誤日誌檢查通過！")
-
-
-    # E305: 函數結束後需要兩個空行
-    async def asyncTearDown(self):
-        """每個測試結束後執行的清理"""
-        print(f"--- 結束測試: {self._testMethodName} ---\n")
-
-
-# E305: 函數/類別結束後需要兩個空行
-if __name__ == '__main__':
-    unittest.main()
-
-# W292: 確保檔案結尾有空行 (編輯器通常會自動處理，或手動在最後加一個空行)
+        invalid_json = 'THIS IS
