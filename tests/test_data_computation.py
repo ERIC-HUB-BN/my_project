@@ -125,10 +125,9 @@ class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
         print("--- End Captured Logs ---")
 
         # 斷言日誌包含預期的錯誤訊息
-        # F541: 修正 - 移除不必要的 f
         self.assertTrue(
             any("WebSocket connection closed for BTCUSDT (spot)" in entry for entry in log.output),
-            "Expected 'WebSocket connection closed' log not found"  # 簡化錯誤訊息
+            "Expected 'WebSocket connection closed' log not found"
         )
         print(">>> test_fetch_data_with_connection_closed: 斷線錯誤日誌檢查通過！")
 
@@ -140,4 +139,33 @@ class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
         """
         mock_ws = AsyncMock()
         mock_connect.return_value.__aenter__.return_value = mock_ws
-        invalid_json = 'THIS IS
+        # --- 語法錯誤修正點 ---
+        invalid_json = 'THIS IS NOT JSON'  # 確保字串是完整的
+        # --- 修正結束 ---
+        mock_ws.recv = AsyncMock(side_effect=[invalid_json])  #  主程式會在 json.loads 時出錯
+
+        with self.assertLogs(level='ERROR') as log:
+             await self.service.fetch_data("BTCUSDT", "spot", stop_after=1)
+
+        print("\n--- Captured Logs for test_fetch_data_with_json_decode_error ---")
+        for i, entry in enumerate(log.output):
+            print(f"Log[{i}]: {entry}")  # E111/E117: 確保縮排正確
+        print("--- End Captured Logs ---")
+        self.assertTrue(
+            any("JSON decoding error for BTCUSDT (spot)" in entry for entry in log.output),
+            "Expected JSON decode error log not found"
+        )
+        print(">>> test_fetch_data_with_json_decode_error: JSON解碼錯誤日誌檢查通過！")
+
+
+    # E301: 在 asyncTearDown 前需要一個空行
+    async def asyncTearDown(self):
+        """每個測試結束後執行的清理"""
+        print(f"--- 結束測試: {self._testMethodName} ---\n")
+
+
+# E305: 函數/類別結束後需要兩個空行
+if __name__ == '__main__':
+    unittest.main()
+
+# W292: 確保檔案結尾有空行
