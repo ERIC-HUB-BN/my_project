@@ -1,11 +1,10 @@
 # tests/test_data_computation.py
 import unittest
-from unittest.mock import AsyncMock, patch, ANY
+from unittest.mock import AsyncMock, patch  # F401: 移除了未使用的 ANY
 import asyncio
 import sys
 import os
-import websockets # 確保引入 websockets
-import json # 確保引入 json
+import websockets  # E261: 確保註解前有兩個空格
 
 # --- 重要：設定主程式碼的路徑 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -14,8 +13,12 @@ if my_project_path not in sys.path:
     sys.path.insert(0, my_project_path)
 # --- 路徑設定結束 ---
 
-from data_computation import DataComputationService
+# E402: Import 保持在這裡，因為需要先設定 sys.path
+# 我們可以在 flake8 設定檔或指令中忽略 E402 for this line
+from data_computation import DataComputationService  # noqa: E402
 
+
+# E302: Class 前面需要兩個空行
 class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
     """
     對 DataComputationService 進行單元測試
@@ -100,10 +103,10 @@ class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
         print(">>> test_calc_once: 價差計算和精確日誌檢查通過！")
 
     @patch("websockets.connect")
-    async def test_fetch_data_with_connection_closed(self, mock_connect): # <-- 改回名字
+    async def test_fetch_data_with_connection_closed(self, mock_connect):
         """
         測試：假裝網路斷線 (ConnectionClosed)，檢查 Log 是否正確記錄錯誤
-        *** 最後嘗試：使用最簡單的 ConnectionClosed 實例 ***
+        *** 使用最簡單的 ConnectionClosed 實例 ***
         """
         mock_ws = AsyncMock()
         mock_connect.return_value.__aenter__.return_value = mock_ws
@@ -124,13 +127,15 @@ class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
         # --- 檢查測試結果 ---
         print("\n--- Captured Logs for test_fetch_data_with_connection_closed ---")
         for i, entry in enumerate(log.output):
-             print(f"Log[{i}]: {entry}")
+            # E111, E117: 修正縮排
+            print(f"Log[{i}]: {entry}")
         print("--- End Captured Logs ---")
 
         # 斷言日誌包含預期的錯誤訊息
         self.assertTrue(
             any(f"WebSocket connection closed for BTCUSDT (spot)" in entry for entry in log.output),
-            f"Expected 'WebSocket connection closed' log not found in logs: {log.output}"
+            # F541: 移除不必要的 f
+            "Expected 'WebSocket connection closed' log not found in logs: {}".format(log.output)
         )
         print(">>> test_fetch_data_with_connection_closed: 斷線錯誤日誌檢查通過！")
 
@@ -143,24 +148,33 @@ class TestDataComputationService(unittest.IsolatedAsyncioTestCase):
         mock_ws = AsyncMock()
         mock_connect.return_value.__aenter__.return_value = mock_ws
         invalid_json = 'THIS IS NOT JSON'
-        mock_ws.recv = AsyncMock(side_effect=[invalid_json]) # 主程式會在 json.loads 時出錯
+        mock_ws.recv = AsyncMock(side_effect=[invalid_json])  # E261: 確保註解前有兩個空格
 
         with self.assertLogs(level='ERROR') as log:
-             await self.service.fetch_data("BTCUSDT", "spot", stop_after=1)
+            await self.service.fetch_data("BTCUSDT", "spot", stop_after=1)
 
         print("\n--- Captured Logs for test_fetch_data_with_json_decode_error ---")
         for i, entry in enumerate(log.output):
+            # E111, E117: 修正縮排
             print(f"Log[{i}]: {entry}")
         print("--- End Captured Logs ---")
         self.assertTrue(
             any(f"JSON decoding error for BTCUSDT (spot)" in entry for entry in log.output),
-            f"Expected JSON decode error log not found in logs: {log.output}"
+            # F541: 移除不必要的 f
+            "Expected JSON decode error log not found in logs: {}".format(log.output)
         )
         print(">>> test_fetch_data_with_json_decode_error: JSON解碼錯誤日誌檢查通過！")
 
+    # E305: 函數結束後需要兩個空行
+    # E305: 函數結束後需要兩個空行
     async def asyncTearDown(self):
         """每個測試結束後執行的清理"""
         print(f"--- 結束測試: {self._testMethodName} ---\n")
 
+
+# E305: 函數/類別結束後需要兩個空行
+# E305: 函數/類別結束後需要兩個空行
 if __name__ == '__main__':
     unittest.main()
+
+# W292: 檔案結尾需要一個空行
