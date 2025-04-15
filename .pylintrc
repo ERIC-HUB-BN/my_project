@@ -1,13 +1,3 @@
 [MESSAGES CONTROL]
 # Disable specific messages by code
-# C0114, C0115, C0116: Missing docstrings
-# W1203: Logging format suggestion
-# W0718: Broad exception caught
-# R1702: Too many nested blocks
-# R0912: Too many branches
-# C0304: Final newline missing
-# W0311: Bad indentation          <-- 新增忽略
-# C0301: Line too long             <-- 新增忽略
-# C0411: Wrong import order        <-- 新增忽略
-# W0611: Unused import            <-- 新增忽略
-disable=C0114,C0115,C0116,W1203,W0718,R1702,R0912,C0304,W0311,C0301,C0411,W0611
+disable=C0114,C0115,C0116,W1203,W0718,R1702,R0912,C0304,W0311,C0301,C0411,W0611,R0911,W1309,R0801
