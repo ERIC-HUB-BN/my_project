@@ -21,10 +21,12 @@ from calculation_service import CalculationService, MIN_PRICE_DIFF_THRESHOLD, BI
 
 # --- 測試用的假 Redis 客戶端 ---
 # E306 修正：在函數定義前加空行
+
 def create_mock_redis_client():
     mock_client = AsyncMock()
 
     # E306 修正：在巢狀函數定義前加空行
+    
     async def mock_scan_iter(*args, **kwargs):
         keys = ["prices:BTCUSDT", "prices:ETHUSDT", "prices:NOSPP"]
         for key in keys:
