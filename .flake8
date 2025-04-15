@@ -2,4 +2,4 @@
 max-line-length = 100
 # Add the codes to ignore, separated by commas
 # Ignore persistent formatting issues, import order, trailing space, extra blank lines
-ignore = E262, E111, E117, E301, W292, E402, W291, E303
+ignore = E262, E111, E117, E301, W292, E402, W291, E303, E261, E302, F541
