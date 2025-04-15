@@ -11,3 +11,14 @@ max-line-length = 100
 # F541: 不必要的 f-string (Unnecessary f-string)
 # W291/W292: 行尾空格/結尾缺空行 (Trailing whitespace / Missing final newline)
 ignore = E111, E114, E117, E201, E202, E261, E262, E301, E302, E303, E402, E501, F401, F541, W291, W292
+
+# --- 以下是 Pylint 的代碼，請勿加入 .flake8 的 ignore ---
+# W0311 (Bad indentation - pylint)
+# C0301 (Line too long - pylint)
+# C0411 (Wrong import order - pylint)
+# W0611 (Unused import - pylint)
+# C0114/C0115/C0116 (Missing docstring - pylint)
+# W1203 (Logging format - pylint)
+# W0718 (Broad except - pylint)
+# R1702/R0912 (Complexity - pylint)
+# C0304 (Final newline - pylint)
