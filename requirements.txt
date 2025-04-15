@@ -7,3 +7,4 @@ pytest-benchmark
 pytest-cov
 websockets
 pytest-asyncio
+redis>=4.2.0
