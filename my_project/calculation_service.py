@@ -40,7 +40,7 @@ class CalculationService:
         self.redis_client: Optional[redis_async.Redis] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
 
-    async def _connect_redis(self) -> bool: # <<< --- 修改：明確回傳 bool ---
+    async def _connect_redis(self) -> bool:
         """建立 Redis 連線"""
         try:
             self.redis_client = redis_async.Redis.from_url(
@@ -48,7 +48,7 @@ class CalculationService:
             )
             await self.redis_client.ping()
             logger.info(f"Successfully connected to Redis at {self.redis_url}")
-            return True # <<< --- 修改：成功回傳 True ---
+            return True
         except redis.exceptions.ConnectionError as e:
             logger.error(f"Failed to connect to Redis: {e}")
         except redis.exceptions.RedisError as e:
@@ -56,11 +56,10 @@ class CalculationService:
         except Exception as e:
              logger.exception(f"Unexpected error connecting to Redis: {e}")
         self.redis_client = None
-        return False # <<< --- 修改：失敗回傳 False ---
+        return False
 
     async def _get_all_prices_from_redis(self) -> Dict[str, Dict[str, Decimal]]:
         """從 Redis 獲取所有交易對的 Spot 和 Perp 價格"""
-        # (此函數內部邏輯上次已驗證，保持不變)
         if not self.redis_client:
             logger.warning("Redis client not available. Cannot fetch prices.")
             return {}
@@ -102,7 +101,6 @@ class CalculationService:
 
     def _calculate_opportunities(self, prices: Dict[str, Dict[str, Decimal]]) -> List[Tuple[str, Decimal]]:
         """根據價格計算符合價差條件的機會"""
-        # (此函數內部邏輯上次已驗證，保持不變)
         opportunities = []
         for symbol, data in prices.items():
             spot = data.get("spot")
@@ -128,15 +126,14 @@ class CalculationService:
         params = {'symbol': symbol}
         request_url = BINANCE_FUNDING_RATE_URL
         try:
-            # --- TypeError 修正：先 await get，再處理 response ---
             response = await self.http_session.get(request_url, params=params)
-            response.raise_for_status() # 檢查 HTTP 狀態碼 (例如 404, 500)
-            data = await response.json() # 解析 JSON 回應
-            # --- 修正結束 ---
+            response.raise_for_status()
+            data = await response.json()
 
-            # (後續解析邏輯不變)
+            # E701 修正：將 if 和賦值分開
             if isinstance(data, list):
-                if not data: return None
+                if not data:
+                    return None
                 funding_info = data[0]
             elif isinstance(data, dict):
                 funding_info = data
@@ -208,7 +205,6 @@ class CalculationService:
 
     async def start(self):
         """啟動服務的主循環"""
-        # <<< --- 修改：檢查回傳值 ---
         if not await self._connect_redis():
              logger.critical("Initial Redis connection failed. Service cannot start.")
              return
@@ -243,8 +239,9 @@ async def main():
             redis_url=REDIS_URL,
             interval=CALCULATION_INTERVAL_SECONDS
         )
-        await service.start() # start 內部會檢查 Redis 連線是否成功
-    # 不再需要在外部捕捉 ConnectionError，start 會處理初始連線失敗
+        await service.start()
+    except ConnectionError as e:
+         logger.critical(f"Service start failed due to connection error: {e}")
     except asyncio.CancelledError:
         logger.info("Service cancellation requested.")
     except Exception as e:
