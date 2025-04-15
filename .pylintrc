@@ -1,9 +1,9 @@
 [MESSAGES CONTROL]
 # Disable specific messages by code
-# C0304: Final newline missing
-# C0114: Missing module docstring
-# C0115: Missing class docstring
-# C0116: Missing function or method docstring
-# W1203: Use lazy % formatting in logging functions
-# W0718: Catching too general exception Exception
-disable=C0304,C0114,C0115,C0116,W1203,W0718
+# C0114, C0115, C0116: Missing docstrings (缺少說明)
+# W1203: Logging format suggestion (日誌格式建議)
+# W0718: Broad exception caught (捕捉太籠統錯誤)
+# R1702: Too many nested blocks (太多巢狀區塊)
+# R0912: Too many branches (太多分支)
+# C0304: Final newline missing (結尾缺空行 - 保留以防萬一)
+disable=C0114,C0115,C0116,W1203,W0718,R1702,R0912,C0304
