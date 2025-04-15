@@ -26,7 +26,7 @@ def create_mock_redis_client():
     mock_client = AsyncMock()
 
     # E306 修正：在巢狀函數定義前加空行
-    
+
     async def mock_scan_iter(*args, **kwargs):
         keys = ["prices:BTCUSDT", "prices:ETHUSDT", "prices:NOSPP"]
         for key in keys:

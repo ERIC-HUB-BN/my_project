@@ -135,8 +135,8 @@ class CalculationService:
                 if not data:
                     return None
                 funding_info = data[0]
-            elif isinstance(data, dict):        
-                
+            elif isinstance(data, dict):
+  
                 funding_info = data
             else:
                 logger.warning(f"Unexpected funding rate API response format for {symbol}: {data}")
