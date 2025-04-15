@@ -1,13 +1,13 @@
 [flake8]
 max-line-length = 100
-# 忽略各種持續出現的格式/風格問題，專注功能
-# E111/E117: 縮排問題
+# Ignore various persistent formatting/style issues
+# E111/E117/E114: 縮排問題 (程式碼 + 註解)
 # E261/E262: 註解空格問題
 # E301/E302/E303: 空行問題
 # E402: import 位置問題
-# E501: 行過長問題 (以防萬一)
-# F401: 未使用的 import (以防萬一)
+# E501: 行過長問題
+# F401: 未使用的 import
 # F541: 不必要的 f-string
 # W291: 行尾多餘空格
 # W292: 檔案結尾缺少空行
-ignore = E111, E117, E261, E262, E301, E302, E303, E402, E501, F401, F541, W291, W292
+ignore = E111, E114, E117, E261, E262, E301, E302, E303, E402, E501, F401, F541, W291, W292
