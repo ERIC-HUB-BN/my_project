@@ -1,34 +1,56 @@
-version: '3.8' # 指定 compose 文件版本
+version: '3.8'
 
 services:
   # --- 您原本的 Python App 服務 ---
   app:
-    build: . # 根據當前目錄的 Dockerfile 建立映像檔
-    container_name: my_python_app # 容器名稱
+    build: .
+    container_name: my_python_app
     volumes:
-      - .:/app # 將目前目錄掛載到容器的 /app 路徑 (方便修改程式碼不用重bild)
+      - .:/app
     ports:
-      - "8000:8000" # 映射端口 (如果您的 app 需要的話)
+      - "8000:8000"
     environment:
-      - ENV=production # 設定環境變數
-    # --- 新增 ---
-    # 讓 app 服務在 redis 服務啟動後再啟動 (比較保險)
+      - ENV=production
+      # --- 修改 depends_on ---
+      # 讓 app 依賴 redis 和 rabbitmq
+      - REDIS_URL=redis://redis:6379 # 指定容器內連線位址
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq/ # 指定容器內連線位址
     depends_on:
       - redis
+      - rabbitmq # <<< --- 新增依賴 ---
 
-  # --- 我們新增的 Redis 服務 ---
+  # --- Redis 服務 (保持不變) ---
   redis:
-    image: "redis:alpine" # 使用 Redis 的官方 Docker 映像檔 (alpine 版本比較小)
-    container_name: my_redis_container # 給這個 Redis 貨櫃取個名字
+    image: "redis:alpine"
+    container_name: my_redis_container
     ports:
-      # 把我們電腦的 6379 port 連接到 Redis 貨櫃的 6379 port
       - "6379:6379"
     volumes:
-      # 把 Redis 的數據存到本機磁碟的 redis_data 儲存區
       - redis_data:/data
-    restart: always # 自動重啟
+    restart: always
 
-# --- 這個 volumes 區塊要放在最外層，跟 services 同級 ---
+  # --- 新增的 RabbitMQ 服務 ---
+  rabbitmq:
+    # 使用帶有管理介面的官方映像檔
+    image: "rabbitmq:3-management-alpine"
+    container_name: my_rabbitmq_container # 容器名稱
+    ports:
+      # 5672 是 RabbitMQ AMQP 協議的主要端口
+      - "5672:5672"
+      # 15672 是 RabbitMQ 管理介面的 Web 端口
+      - "15672:15672"
+    volumes:
+      # 將 RabbitMQ 的數據持久化 (可選)
+      - rabbitmq_data:/var/lib/rabbitmq
+    # RabbitMQ 預設的 guest/guest 帳密通常夠開發用
+    # environment:
+    #   - RABBITMQ_DEFAULT_USER=user
+    #   - RABBITMQ_DEFAULT_PASS=password
+    restart: always
+
+# --- volumes 區塊更新 ---
 volumes:
   redis_data:
-    driver: local # 使用本地磁碟驅動
+    driver: local
+  rabbitmq_data: # <<< --- 新增 RabbitMQ 的 volume ---
+    driver: local

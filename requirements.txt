@@ -9,3 +9,4 @@ websockets
 pytest-asyncio
 redis>=4.6.0
 aiohttp>=3.8.0
+aio_pika>=6.0.0
