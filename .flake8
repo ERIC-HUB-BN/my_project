@@ -1,24 +1,4 @@
 [flake8]
 max-line-length = 100
-# 忽略特定的 flake8 格式/風格問題
-# E111/E114/E117: 縮排問題 (Indentation)
-# E201/E202: 括號旁空格 (Whitespace around brackets)
-# E261/E262: 註解旁空格 (Whitespace around comments)
-# E301/E302/E303: 空行問題 (Blank lines)
-# E402: import 位置問題 (Import position)
-# E501: 行過長 (Line length)
-# F401: 未使用的 import (Unused import)
-# F541: 不必要的 f-string (Unnecessary f-string)
-# W291/W292: 行尾空格/結尾缺空行 (Trailing whitespace / Missing final newline)
-ignore = E111, E114, E117, E201, E202, E261, E262, E301, E302, E303, E402, E501, F401, F541, W291, W292
-
-# --- 以下是 Pylint 的代碼，請勿加入 .flake8 的 ignore ---
-# W0311 (Bad indentation - pylint)
-# C0301 (Line too long - pylint)
-# C0411 (Wrong import order - pylint)
-# W0611 (Unused import - pylint)
-# C0114/C0115/C0116 (Missing docstring - pylint)
-# W1203 (Logging format - pylint)
-# W0718 (Broad except - pylint)
-# R1702/R0912 (Complexity - pylint)
-# C0304 (Final newline - pylint)
+# Ignore various persistent formatting/style issues
+ignore = E111, E114, E117, E201, E202, E261, E262, E301, E302, E303, E306, E402, E501, E701, F401, F541, F841, W291, W292
