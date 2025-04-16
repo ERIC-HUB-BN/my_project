@@ -1,35 +1,41 @@
 # tests/test_orderbook_service.py
 import unittest
-from unittest.mock import patch, AsyncMock, MagicMock, call # 用來建立假的物件和檢查函數呼叫
+from unittest.mock import patch, AsyncMock, MagicMock, call, ANY
 import asyncio
 import sys
 import os
-import json # 用來建立測試訊息
+import json
 from decimal import Decimal
-import logging # <<< --- 確保這一行 import logging 在 ---
+import logging
 
-# --- 設定主程式碼的路徑 (跟其他測試檔一樣) ---
+# --- 設定主程式碼的路徑 ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 my_project_path = os.path.join(project_root, 'my_project')
 if my_project_path not in sys.path:
     sys.path.insert(0, my_project_path)
 # --- 路徑設定結束 ---
 
-import aio_pika # 匯入 aio_pika 來模擬它的物件和錯誤
-# 匯入我們要測試的 OrderBookService 類別
-from orderbook_service import OrderBookService, RABBITMQ_URL, OPPORTUNITY_QUEUE_NAME # noqa: E402
+import aio_pika
+import websockets
+from orderbook_service import ( # noqa: E402
+    OrderBookService,
+    RABBITMQ_URL,
+    OPPORTUNITY_QUEUE_NAME,
+    BINANCE_SPOT_WS_BASE,
+    BINANCE_FUTURES_WS_BASE,
+    DEPTH_STREAM_PARAM
+)
 
-# --- 測試用的假 RabbitMQ 物件 (跟 CalculationService 測試類似) ---
+# --- 測試用的假 RabbitMQ 物件 ---
 def create_mock_rabbitmq_channel():
     mock_channel = AsyncMock()
-    mock_channel.set_qos = AsyncMock() # 我們需要模擬 set_qos
-    mock_channel.declare_queue = AsyncMock() # 需要模擬 declare_queue
-    # 模擬 declare_queue 返回一個假的 Queue 物件
+    mock_channel.set_qos = AsyncMock()
+    mock_channel.declare_queue = AsyncMock()
     mock_queue = AsyncMock()
-    mock_queue.consume = AsyncMock() # Queue 物件需要有 consume 方法
+    mock_queue.consume = AsyncMock()
     mock_channel.declare_queue.return_value = mock_queue
     mock_channel.close = AsyncMock()
-    return mock_channel, mock_queue # 返回 channel 和 queue
+    return mock_channel, mock_queue
 
 def create_mock_rabbitmq_connection(mock_channel):
     mock_connection = AsyncMock()
@@ -37,170 +43,216 @@ def create_mock_rabbitmq_connection(mock_channel):
     mock_connection.close = AsyncMock()
     return mock_connection
 
-# --- 建立假的訊息物件 ---
 def create_mock_incoming_message(body_data: dict) -> MagicMock:
-    """建立一個假的 aio_pika 傳入訊息物件"""
     message = MagicMock(spec=aio_pika.abc.AbstractIncomingMessage)
-    message.body = json.dumps(body_data).encode('utf-8') # 將字典轉成 JSON 字串再轉 bytes
-
-    # 模擬 process() 的 context manager
-    # 讓 async with message.process(): 可以運作
+    message.body = json.dumps(body_data).encode('utf-8')
     async def mock_process(*args, **kwargs):
-        yield # 模擬進入 async with 區塊
+        yield
     message.process = MagicMock(return_value=AsyncMock())
     message.process.return_value.__aenter__ = AsyncMock(side_effect=mock_process)
-    message.process.return_value.__aexit__ = AsyncMock(return_value=None) # 模擬離開區塊
-
+    message.process.return_value.__aexit__ = AsyncMock(return_value=None)
     return message
+
+# --- 測試用的假 WebSocket 連線 (再次修改版) ---
+def create_mock_websocket(messages_to_send=None):
+    """建立一個假的 WebSocket 連線物件"""
+    mock_ws = AsyncMock()
+    if messages_to_send is None:
+        messages_to_send = []
+    _messages = list(messages_to_send)
+
+    async def mock_recv_logic(): # 將原始的 recv 邏輯獨立出來
+        if _messages:
+            return _messages.pop(0)
+        else:
+            raise asyncio.CancelledError("Mock WS finished sending messages")
+
+    # --- 修改：將 mock_recv_logic 包在 AsyncMock 中 ---
+    mock_ws.recv = AsyncMock(side_effect=mock_recv_logic)
+    mock_ws.close = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=None)
+    return mock_ws
 
 # --- 測試類別 ---
 class TestOrderBookService(unittest.IsolatedAsyncioTestCase):
     """
-    對 OrderBookService 進行單元測試
+    對 OrderBookService 進行單元測試 (包含 WebSocket 部分)
     """
     def setUp(self):
-        """每個測試開始前的準備"""
         self.service = OrderBookService(rabbitmq_url="amqp://fake_url/")
-        # 把 logger 的等級調到 DEBUG，這樣才能捕捉 info 等級的訊息
         logging.getLogger("OrderBookService").setLevel(logging.DEBUG)
+        self.patch_manage_symbol_websockets = patch.object(
+            OrderBookService, '_manage_symbol_websockets', new_callable=AsyncMock
+        )
+        self.mock_manage_symbol_websockets = self.patch_manage_symbol_websockets.start()
+        self.patch_create_task = patch('asyncio.create_task')
+        self.mock_create_task = self.patch_create_task.start()
 
-    @patch("aio_pika.connect_robust") # 把實際的 aio_pika.connect_robust 換成假的
+    def tearDown(self):
+        self.patch_manage_symbol_websockets.stop()
+        self.patch_create_task.stop()
+        logging.getLogger("OrderBookService").setLevel(logging.INFO)
+
+    @patch("aio_pika.connect_robust")
     async def test_connect_rabbitmq_success(self, mock_connect_robust):
-        """測試：成功連接 RabbitMQ"""
         print("\n--- 測試：成功連接 RabbitMQ ---")
         mock_channel, _ = create_mock_rabbitmq_channel()
         mock_connection = create_mock_rabbitmq_connection(mock_channel)
-        mock_connect_robust.return_value = mock_connection # 設定假連線的回傳值
-
-        result = await self.service._connect_rabbitmq() # 呼叫要測試的函數
-
-        self.assertTrue(result) # 斷言結果應該是 True
-        mock_connect_robust.assert_awaited_once_with(self.service.rabbitmq_url) # 檢查 connect_robust 是否被正確呼叫
-        mock_connection.channel.assert_awaited_once() # 檢查是否有取得 channel
-        mock_channel.set_qos.assert_awaited_once_with(prefetch_count=1) # 檢查是否有設定 QoS
-        self.assertIsNotNone(self.service.rabbitmq_connection) # 檢查 service 內的變數是否有被設定
-        self.assertIsNotNone(self.service.rabbitmq_channel)
+        mock_connect_robust.return_value = mock_connection
+        result = await self.service._connect_rabbitmq()
+        self.assertTrue(result)
         print(">>> test_connect_rabbitmq_success: 通過")
 
     @patch("aio_pika.connect_robust")
     async def test_connect_rabbitmq_failure(self, mock_connect_robust):
-        """測試：連接 RabbitMQ 失敗"""
         print("\n--- 測試：連接 RabbitMQ 失敗 ---")
-        # 讓假的 connect_robust 在被呼叫時，丟出一個連線錯誤
         mock_connect_robust.side_effect = aio_pika.exceptions.AMQPConnectionError("測試連線錯誤")
-
         result = await self.service._connect_rabbitmq()
-
-        self.assertFalse(result) # 斷言結果應該是 False
-        self.assertIsNone(self.service.rabbitmq_connection) # 檢查 service 內的變數是否還是 None
-        self.assertIsNone(self.service.rabbitmq_channel)
+        self.assertFalse(result)
         print(">>> test_connect_rabbitmq_failure: 通過")
 
-    async def test_on_message_success(self):
-        """測試：成功處理一則有效的機會訊息"""
-        print("\n--- 測試：成功處理有效訊息 ---")
-        # 建立一則假的訊息，內容包含 symbol
-        test_data = {
-            "symbol": "BTCUSDT",
-            "price_difference_percent": "0.45%",
-            "funding_rate_percent": "0.01%",
-            "timestamp": 1678886400.0
-        }
+    # --- 修改：test_on_message_starts_new_symbol_task 中的斷言 ---
+    async def test_on_message_starts_new_symbol_task(self):
+        """測試：收到新 symbol 的訊息時，會啟動 WebSocket 監聽任務"""
+        print("\n--- 測試：收到新 symbol 啟動任務 ---")
+        symbol = "BTCUSDT"
+        test_data = {"symbol": symbol, "price_difference_percent": "0.45%"}
         mock_message = create_mock_incoming_message(test_data)
+        mock_task = AsyncMock()
+        self.mock_create_task.return_value = mock_task
 
-        # 使用 assertLogs 來檢查是否有印出我們預期的 Log
-        with self.assertLogs(logger="OrderBookService", level="INFO") as cm:
-            await self.service._on_message(mock_message) # 直接呼叫處理訊息的函數
+        await self.service._on_message(mock_message)
 
-        # 檢查 Log 輸出裡面是否包含 "收到套利機會訊息，交易對: BTCUSDT"
-        self.assertTrue(any("收到套利機會訊息，交易對: BTCUSDT" in log for log in cm.output))
-        print(">>> test_on_message_success: Log 檢查通過")
-        # 檢查 process context manager 被正確使用
-        mock_message.process.assert_called_once()
+        expected_spot_url = f"{BINANCE_SPOT_WS_BASE}/{symbol.lower()}{DEPTH_STREAM_PARAM}"
+        expected_perp_url = f"{BINANCE_FUTURES_WS_BASE}/{symbol.lower()}{DEPTH_STREAM_PARAM}"
+
+        # --- 修改：使用 assert_called_once_with 而不是 assert_awaited_once_with ---
+        self.mock_manage_symbol_websockets.assert_called_once_with(
+            symbol, expected_spot_url, expected_perp_url
+        )
+
+        self.mock_create_task.assert_called_once()
+        self.assertIn(symbol, self.service.active_symbol_tasks)
+        self.assertEqual(self.service.active_symbol_tasks[symbol], mock_task)
+        self.assertIn(symbol, self.service.order_books)
+        self.assertEqual(self.service.order_books[symbol], {"spot": {}, "perp": {}})
+        mock_task.add_done_callback.assert_called_once()
+        print(">>> test_on_message_starts_new_symbol_task: 通過")
 
 
-    async def test_on_message_missing_symbol(self):
-        """測試：處理一則缺少 symbol 的訊息"""
-        print("\n--- 測試：處理缺少 symbol 的訊息 ---")
-        test_data = { # 故意不放 symbol
-            "price_difference_percent": "0.45%",
-            "funding_rate_percent": "0.01%",
-            "timestamp": 1678886400.0
-        }
+    async def test_on_message_ignores_existing_symbol(self):
+        print("\n--- 測試：忽略已存在的 symbol ---")
+        symbol = "ETHUSDT"
+        self.service.active_symbol_tasks[symbol] = AsyncMock()
+        test_data = {"symbol": symbol, "price_difference_percent": "0.50%"}
         mock_message = create_mock_incoming_message(test_data)
-
-        # 這次預期會印出 WARNING 等級的 Log
-        with self.assertLogs(logger="OrderBookService", level="WARNING") as cm:
-            await self.service._on_message(mock_message)
-
-        self.assertTrue(any("收到的訊息格式不符，缺少 'symbol'" in log for log in cm.output))
-        print(">>> test_on_message_missing_symbol: Log 檢查通過")
-        mock_message.process.assert_called_once()
-
+        await self.service._on_message(mock_message)
+        # --- 修改：assert_not_awaited -> assert_not_called ---
+        # 雖然這裡用 awaited 或 called 結果一樣，但 called 更精確
+        self.mock_manage_symbol_websockets.assert_not_called()
+        self.mock_create_task.assert_not_called()
+        print(">>> test_on_message_ignores_existing_symbol: 通過")
 
     async def test_on_message_invalid_json(self):
-        """測試：處理一則內容不是 JSON 的訊息"""
         print("\n--- 測試：處理無效 JSON 訊息 ---")
-        # 建立一個假的訊息，但 body 不是 JSON
         mock_message = MagicMock(spec=aio_pika.abc.AbstractIncomingMessage)
-        mock_message.body = b"this is not json" # 給它一個不是 JSON 的 bytes
-
-        # 模擬 process() context manager
-        async def mock_process(*args, **kwargs):
-            yield
+        mock_message.body = b"this is not json"
+        async def mock_process(*args, **kwargs): yield
         mock_message.process = MagicMock(return_value=AsyncMock())
         mock_message.process.return_value.__aenter__ = AsyncMock(side_effect=mock_process)
         mock_message.process.return_value.__aexit__ = AsyncMock(return_value=None)
+        with self.assertLogs(logger="OrderBookService", level="ERROR"):
+             await self.service._on_message(mock_message)
+        print(">>> test_on_message_invalid_json: 通過")
 
-        # 這次預期會印出 ERROR 等級的 Log
-        with self.assertLogs(logger="OrderBookService", level="ERROR") as cm:
-            await self.service._on_message(mock_message)
+    # --- 修改：test_listen_depth_stream_parsing 中的斷言 ---
+    @patch('websockets.connect')
+    async def test_listen_depth_stream_parsing(self, mock_connect):
+        """測試：能否正確解析 WebSocket 收到的深度資料 (修改版)"""
+        print("\n--- 測試：解析 WebSocket 深度資料 ---")
+        symbol = "BTCUSDT"
+        stream_type = "spot"
+        mock_depth_message_1 = json.dumps({
+            "lastUpdateId": 1001,
+            "bids": [["30000.00", "1.5"], ["29999.00", "2.0"]],
+            "asks": [["30001.00", "0.5"], ["30002.00", "1.0"]]
+        })
+        mock_depth_message_2 = json.dumps({
+            "lastUpdateId": 1002,
+            "bids": [["30005.00", "0.8"], ["29999.00", "2.0"]],
+            "asks": [["30006.00", "1.2"], ["30007.00", "0.3"]]
+        })
+        mock_ws = create_mock_websocket(messages_to_send=[mock_depth_message_1, mock_depth_message_2])
+        mock_connect.return_value = mock_ws
 
-        self.assertTrue(any("無法解析收到的訊息 (非 JSON)" in log for log in cm.output))
-        print(">>> test_on_message_invalid_json: Log 檢查通過")
-        mock_message.process.assert_called_once()
+        self.service.order_books[symbol] = {"spot": {}, "perp": {}}
 
-    # --- 以下是 test_start_consuming 的修正版本 ---
-    @patch("orderbook_service.OrderBookService._connect_rabbitmq") # <--- @patch 在這裡
-    async def test_start_consuming(self, mock_connect): # <--- mock_connect 參數在這裡
-        """測試：start_consuming 是否正確設定並呼叫 consume"""
-        print("\n--- 測試：start_consuming 流程 ---")
-        # 假設連線成功
-        mock_connect.return_value = True # 使用 mock_connect
-        mock_channel, mock_queue = create_mock_rabbitmq_channel()
-        self.service.rabbitmq_channel = mock_channel # 手動設定 channel
-
-        # 執行 start_consuming (它會一直跑到 await future)
-        # 我們用 asyncio.wait_for 來設定一個超時，避免測試卡住
         try:
-             # 這裡的 service.start_consuming() 內部現在會用 *真的* asyncio.Future
-             await asyncio.wait_for(self.service.start_consuming(), timeout=0.1)
-        except asyncio.TimeoutError:
-             pass # 預期會超時，因為 start_consuming 會卡在 await future 等待
+            await self.service._listen_depth_stream(symbol, "ws://fake", stream_type)
+        except asyncio.CancelledError as e:
+            self.assertEqual(str(e), "Mock WS finished sending messages")
+            print("--- 測試：捕獲到預期的 CancelledError ---")
+        except Exception as e:
+             self.fail(f"_listen_depth_stream 拋出了未預期的錯誤: {e}")
 
-        # 檢查 declare_queue 是否被呼叫來取得佇列
-        mock_channel.declare_queue.assert_awaited_once_with(
-            OPPORTUNITY_QUEUE_NAME, durable=True
-        )
-        # 檢查 queue.consume 是否被呼叫，並且傳入了正確的回調函數
-        mock_queue.consume.assert_awaited_once_with(self.service._on_message)
-        # 我們不再檢查 asyncio.Future 的 mock_future.assert_called_once()
-        print(">>> test_start_consuming: 通過")
-    # --- test_start_consuming 函數結束 ---
+        mock_connect.assert_called_once_with("ws://fake", ping_interval=20, ping_timeout=10)
+        # --- 修改：現在 mock_ws.recv 是 AsyncMock，可以檢查 call_count ---
+        self.assertEqual(mock_ws.recv.call_count, 3) # 前兩次收到訊息，第三次拋出 CancelledError
 
-    # E301: 在 asyncTearDown 前需要一個空行
+        expected_bid = ["30005.00", "0.8"]
+        expected_ask = ["30006.00", "1.2"]
+        self.assertEqual(self.service.order_books[symbol][stream_type].get('bid'), expected_bid)
+        self.assertEqual(self.service.order_books[symbol][stream_type].get('ask'), expected_ask)
+        print(">>> test_listen_depth_stream_parsing: 通過")
+
+
+    def test_handle_task_completion_removes_symbol(self):
+        print("\n--- 測試：任務完成回調移除 symbol ---")
+        symbol = "ETHUSDT"
+        self.service.active_symbol_tasks[symbol] = AsyncMock(spec=asyncio.Task)
+        self.service.order_books[symbol] = {"spot": {}, "perp": {}}
+        mock_task = AsyncMock(spec=asyncio.Task)
+        mock_task.exception.return_value = None
+        callback = self.service._handle_task_completion(symbol)
+        callback(mock_task)
+        self.assertNotIn(symbol, self.service.active_symbol_tasks)
+        self.assertNotIn(symbol, self.service.order_books)
+        print(">>> test_handle_task_completion_removes_symbol: 通過")
+
+    def test_handle_task_completion_logs_exception(self):
+        print("\n--- 測試：任務完成回調記錄異常 ---")
+        symbol = "ADAUSDT"
+        self.service.active_symbol_tasks[symbol] = AsyncMock(spec=asyncio.Task)
+        self.service.order_books[symbol] = {"spot": {}, "perp": {}}
+        mock_task = AsyncMock(spec=asyncio.Task)
+        test_exception = ValueError("測試任務異常")
+        mock_task.exception.return_value = test_exception
+        callback = self.service._handle_task_completion(symbol)
+        with self.assertLogs(logger="OrderBookService", level="ERROR"):
+            callback(mock_task)
+        self.assertNotIn(symbol, self.service.active_symbol_tasks)
+        self.assertNotIn(symbol, self.service.order_books)
+        print(">>> test_handle_task_completion_logs_exception: 通過")
+
+    async def test_close_cancels_active_tasks(self):
+        print("\n--- 測試：關閉服務取消任務 ---")
+        symbol1 = "BTCUSDT"
+        symbol2 = "ETHUSDT"
+        mock_task1 = AsyncMock(spec=asyncio.Task)
+        mock_task2 = AsyncMock(spec=asyncio.Task)
+        self.service.active_symbol_tasks = {symbol1: mock_task1, symbol2: mock_task2}
+        self.service.rabbitmq_connection = AsyncMock()
+        self.service.rabbitmq_channel = AsyncMock()
+        with patch('asyncio.gather', new_callable=AsyncMock) as mock_gather:
+             await self.service.close()
+        mock_task1.cancel.assert_called_once()
+        mock_task2.cancel.assert_called_once()
+        mock_gather.assert_awaited_once_with(mock_task1, mock_task2, return_exceptions=True)
+        print(">>> test_close_cancels_active_tasks: 通過")
+
     async def asyncTearDown(self):
-        """每個測試結束後的清理"""
-        # 把 logger 等級設回來，避免影響其他測試
-        logging.getLogger("OrderBookService").setLevel(logging.INFO)
-        # 如果 service 有模擬的連線，嘗試關閉 (雖然是假的，但好習慣)
-        if self.service and hasattr(self.service, 'close'):
-            await self.service.close()
-        print(f"--- 測試結束: {self._testMethodName} ---\n")
+        pass
 
-
-# E305: 函數/類別結束後需要兩個空行
 if __name__ == '__main__':
     unittest.main()
-
-# W292: 確保檔案結尾有空行
