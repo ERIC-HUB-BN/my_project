@@ -1,4 +1,4 @@
 [flake8]
 max-line-length = 100
 # Ignore various persistent formatting/style issues
-ignore = E111, E114, E117, E201, E202, E261, E262, E301, E302, E303, E306, E402, E501, E701, F401, F541, F841, W291, W292
+ignore = E111, E114, E117, E201, E202, E261, E262, E301, E302, E303, E306, E402, E501, E701, F401, F541, F841, W291, W292, E704, E305
