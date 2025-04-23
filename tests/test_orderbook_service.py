@@ -243,7 +243,7 @@ class TestOrderBookService(unittest.IsolatedAsyncioTestCase):
         print("\n--- 測試：任務完成回調記錄異常 ---")
         symbol = "ADAUSDT"; self.service.active_symbol_tasks[symbol] = AsyncMock(spec=asyncio.Task); self.service.order_books[symbol] = {"spot": {}, "perp": {}}
         mock_task = AsyncMock(spec=asyncio.Task); test_exception = ValueError("測試任務異常"); mock_task.exception.return_value = test_exception
-        callback = self.service._handle_task_completion(symbol);
+        callback = self.service._handle_task_completion(symbol)
         with self.assertLogs(logger="OrderBookService", level="ERROR"): callback(mock_task)
         self.assertNotIn(symbol, self.service.active_symbol_tasks); self.assertNotIn(symbol, self.service.order_books)
         print(">>> test_handle_task_completion_logs_exception: 通過")
