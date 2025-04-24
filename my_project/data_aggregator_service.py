@@ -6,12 +6,19 @@ import os
 import websockets
 import redis  # 用於 exceptions
 import redis.asyncio as redis_async # 保持別名
-from typing import Optional, Dict, Any, List, Tuple # <<< --- 新增：匯入 Optional ---
+import aiohttp
+from typing import Optional, Dict, Any, List, Tuple, Set
+from collections import defaultdict
 
 # --- 環境變數 ---
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379")
 BINANCE_FUTURES_WS_BASE = "wss://fstream.binance.com"
 BINANCE_SPOT_WS_BASE = "wss://stream.binance.com:9443"
+BINANCE_SPOT_EXCHANGE_INFO_URL = "https://api.binance.com/api/v3/exchangeInfo"
+BINANCE_FUTURES_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+WHITELIST_UPDATE_INTERVAL_SECONDS = 3600
+SPOT_WHITELIST_KEY = "valid_symbols:spot"
+PERP_WHITELIST_KEY = "valid_symbols:perp"
 
 # --- 日誌設定 ---
 logging.basicConfig(
@@ -21,22 +28,23 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-logger = logging.getLogger("DataAggregatorService") # 給 logger 一個名字
-
+logger = logging.getLogger("DataAggregatorService")
 
 # --- 主要服務類別 ---
 class DataAggregatorService:
     """
     負責連接幣安全市場數據流 (Spot Mini Ticker, Futures Mark Price),
-    解析數據, 並將 Spot 最新價 和 Perp 標記價 寫入 Redis.
+    解析數據, 過濾無效交易對後, 將 Spot 最新價 和 Perp 標記價 寫入 Redis.
+    同時定期更新有效的交易對白名單。
     """
     def __init__(self, redis_url):
         self.redis_url = redis_url
-        # E1131 修正：使用 Optional[...] 而不是 | None (兼容 Python 3.9)
         self.redis_client: Optional[redis_async.Redis] = None
-        # 使用字典暫存價格，減少對 Redis 的頻繁 hset (可選優化)
-        # self.price_cache: Dict[str, Dict[str, Any]] = defaultdict(dict)
-        # self.last_redis_update: Dict[str, float] = defaultdict(float)
+        self.http_session: Optional[aiohttp.ClientSession] = None
+        self._whitelist_update_task: Optional[asyncio.Task] = None
+        self._spot_whitelist_cache: Set[str] = set()
+        self._perp_whitelist_cache: Set[str] = set()
+        self._websocket_listener_tasks: List[asyncio.Task] = [] # 用來追蹤 WS 任務
 
     async def _connect_redis(self):
         """建立 Redis 連線"""
@@ -55,188 +63,227 @@ class DataAggregatorService:
             self.redis_client = None
             raise ConnectionError("Redis error during connection") from e
 
-    async def _write_price_to_redis(self, symbol: str, field: str, price: Any):
-        """將價格寫入 Redis Hash"""
-        if not self.redis_client:
-            return
+    async def _fetch_exchange_info(self, url: str) -> Optional[Dict[str, Any]]:
+        """使用 aiohttp 呼叫 ExchangeInfo API"""
+        if not self.http_session:
+            logger.warning("HTTP session not available. Cannot fetch exchange info.")
+            return None
         try:
-            # Key: "prices:BTCUSDT", Field: "spot" or "perp", Value: price
-            # W0311: 修正縮排
-            await self.redis_client.hset(f"prices:{symbol}", key=field, value=price)
-            # logger.debug(f"Updated {field} price for {symbol} in Redis: {price}")
-        except redis.exceptions.RedisError as e:
-            logger.error(f"Redis error writing price for {symbol}: {e}")
+            # 確保 http_session 存在且未關閉
+            if self.http_session.closed:
+                 logger.warning("HTTP session is closed. Cannot fetch exchange info.")
+                 # 可以選擇重新建立 session 或直接返回 None
+                 # self.http_session = aiohttp.ClientSession() # 或重新建立
+                 return None
+
+            async with self.http_session.get(url, timeout=10) as response:
+                response.raise_for_status()
+                data = await response.json()
+                # logger.info(f"Successfully fetched exchange info from {url}") # Log 太頻繁，先註解
+                return data
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"HTTP error fetching exchange info from {url}: {e.status} {e.message}")
+        except aiohttp.ClientConnectionError as e:
+             logger.error(f"Connection error fetching exchange info from {url}: {e}")
+        except asyncio.TimeoutError:
+             logger.error(f"Timeout error fetching exchange info from {url}")
         except Exception as e:
-            logger.exception(f"Unexpected error writing price for {symbol}: {e}")
+            logger.exception(f"Unexpected error fetching exchange info from {url}: {e}")
+        return None
 
-    async def _process_spot_ticker(self, ticker: Dict[str, Any]):
-        """處理單個 Spot Ticker 數據"""
-        symbol = ticker.get('s')
-        if symbol and symbol.endswith('USDT'):
-            price = ticker.get('c')  # Spot 最新成交價
-            if price:
-                # W0311: 修正縮排
-                await self._write_price_to_redis(symbol, "spot", price)
-
-    async def _process_perp_ticker(self, ticker: Dict[str, Any]):
-        """處理單個 Perp Ticker 數據"""
-        symbol = ticker.get('s')
-        if symbol and symbol.endswith('USDT'):
-            price = ticker.get('p')  # Perp 標記價格
-            if price:
-                # W0311: 修正縮排
-                await self._write_price_to_redis(symbol, "perp", price)
-
-    async def _process_message_single(self, message: str, stream_desc: str):
-        """
-        處理來自單一聚合流的訊息
-        Refactored to reduce branches and nesting.
-        """
-        if not self.redis_client:
-            logger.warning("Redis client not available, skipping message processing.")
+    async def _update_whitelist(self):
+        """獲取 Spot 和 Futures 的交易對資訊，並更新 Redis 和記憶體中的白名單"""
+        if not self.redis_client or not self.http_session:
+            logger.warning("Redis client or HTTP session not available. Skipping whitelist update.")
             return
+
+        logger.info("Starting whitelist update...")
+        spot_info = await self._fetch_exchange_info(BINANCE_SPOT_EXCHANGE_INFO_URL)
+        futures_info = await self._fetch_exchange_info(BINANCE_FUTURES_EXCHANGE_INFO_URL)
+
+        new_spot_whitelist = set()
+        if spot_info and 'symbols' in spot_info:
+            for symbol_data in spot_info['symbols']:
+                if (symbol_data.get('status') == 'TRADING' and
+                    symbol_data.get('quoteAsset') == 'USDT'):
+                     new_spot_whitelist.add(symbol_data.get('symbol'))
+            logger.info(f"Found {len(new_spot_whitelist)} valid Spot trading pairs.")
+        else:
+             logger.warning("Could not get valid Spot exchange info.")
+
+        new_perp_whitelist = set()
+        if futures_info and 'symbols' in futures_info:
+            for symbol_data in futures_info['symbols']:
+                if (symbol_data.get('contractType') == 'PERPETUAL' and
+                    symbol_data.get('status') == 'TRADING' and
+                    symbol_data.get('quoteAsset') == 'USDT'):
+                     new_perp_whitelist.add(symbol_data.get('symbol'))
+            logger.info(f"Found {len(new_perp_whitelist)} valid Perp trading pairs.")
+        else:
+            logger.warning("Could not get valid Futures exchange info.")
+
+        pipe = self.redis_client.pipeline(transaction=True)
         try:
-            payload = json.loads(message)
-            # 聚合流通常是列表
-            if not isinstance(payload, list):
-                 logger.warning(f"Unexpected payload type from {stream_desc}: {type(payload)}")
-                 return
+            pipe.delete(SPOT_WHITELIST_KEY)
+            if new_spot_whitelist:
+                pipe.sadd(SPOT_WHITELIST_KEY, *new_spot_whitelist)
+            pipe.delete(PERP_WHITELIST_KEY)
+            if new_perp_whitelist:
+                pipe.sadd(PERP_WHITELIST_KEY, *new_perp_whitelist)
+            await pipe.execute()
 
-            process_func = None
-            if stream_desc == "Spot MiniTicker":
-                process_func = self._process_spot_ticker
-            elif stream_desc == "Futures MarkPrice":
-                process_func = self._process_perp_ticker
-            else:
-                # C0301: 修正 - 換行使行長度不超過 100
-                logger.warning(
-                    f"Unknown stream description for processing: {stream_desc}"
-                )
-                return
+            self._spot_whitelist_cache = new_spot_whitelist
+            self._perp_whitelist_cache = new_perp_whitelist
+            logger.info(f"Whitelist updated in Redis and memory cache. Spot: {len(self._spot_whitelist_cache)}, Perp: {len(self._perp_whitelist_cache)}")
 
-            # 使用 asyncio.gather 併發處理列表中的 ticker
-            tasks = [process_func(ticker) for ticker in payload if isinstance(ticker, dict)]
-            if tasks:
-                await asyncio.gather(*tasks)
-
-        except json.JSONDecodeError:
-            # C0301: 修正 - 換行
-            logger.error(
-                f"Failed to decode JSON from {stream_desc}: {message[:100]}"
-            )
         except redis.exceptions.RedisError as e:
-            logger.error(f"Redis error processing message from {stream_desc}: {e}")
+            logger.error(f"Redis error updating whitelist: {e}")
+            self._spot_whitelist_cache = set()
+            self._perp_whitelist_cache = set()
         except Exception as e:
-            # C0301: 修正 - 換行
-            logger.exception(
-                f"Error processing message batch from {stream_desc}: {e}"
-            )
+             logger.exception(f"Unexpected error updating whitelist: {e}")
+             self._spot_whitelist_cache = set()
+             self._perp_whitelist_cache = set()
 
-    async def _listen_single_stream(self, url: str, stream_desc: str):
-        """監聽單一 WebSocket Stream 的輔助函數，包含重連邏輯"""
+    async def _run_whitelist_updater(self):
+        """定期執行白名單更新"""
+        logger.info(f"Whitelist updater started. Update interval: {WHITELIST_UPDATE_INTERVAL_SECONDS} seconds.")
         while True:
             try:
-                # C0301: 修正 - 換行
-                logger.info(
-                    f"Connecting to {stream_desc} stream at {url}..."
-                )
+                await self._update_whitelist()
+                await asyncio.sleep(WHITELIST_UPDATE_INTERVAL_SECONDS)
+            except asyncio.CancelledError:
+                logger.info("Whitelist updater task cancelled.")
+                break # 被取消時跳出迴圈
+            except Exception as e:
+                logger.exception(f"Error during scheduled whitelist update: {e}")
+                await asyncio.sleep(60) # 出錯時，稍後再試
+
+    async def _write_price_to_redis(self, symbol: str, field: str, price: Any):
+        """將價格寫入 Redis Hash (在寫入前檢查白名單)"""
+        if not self.redis_client: return
+        is_valid = symbol in self._spot_whitelist_cache if field == 'spot' else (symbol in self._perp_whitelist_cache if field == 'perp' else False)
+        if not is_valid: return
+        try: await self.redis_client.hset(f"prices:{symbol}", key=field, value=price)
+        except redis.exceptions.RedisError as e: logger.error(f"Redis error writing price for {symbol}: {e}")
+        except Exception as e: logger.exception(f"Unexpected error writing price for {symbol}: {e}")
+
+    async def _process_spot_ticker(self, ticker: Dict[str, Any]):
+        symbol, price = ticker.get('s'), ticker.get('c')
+        if symbol and price: await self._write_price_to_redis(symbol, "spot", price)
+
+    async def _process_perp_ticker(self, ticker: Dict[str, Any]):
+        symbol, price = ticker.get('s'), ticker.get('p')
+        if symbol and price: await self._write_price_to_redis(symbol, "perp", price)
+
+    async def _process_message_single(self, message: str, stream_desc: str):
+        if not self.redis_client: return
+        try:
+            payload = json.loads(message)
+            if not isinstance(payload, list): return
+            process_func = self._process_spot_ticker if stream_desc == "Spot MiniTicker" else (self._process_perp_ticker if stream_desc == "Futures MarkPrice" else None)
+            if not process_func: return
+            tasks = [process_func(ticker) for ticker in payload if isinstance(ticker, dict)]
+            if tasks: await asyncio.gather(*tasks)
+        except json.JSONDecodeError: logger.error(f"Failed to decode JSON from {stream_desc}: {message[:100]}")
+        except Exception as e: logger.exception(f"Error processing message batch from {stream_desc}: {e}")
+
+    async def _listen_single_stream(self, url: str, stream_desc: str):
+        while True:
+            try:
+                logger.info(f"Connecting to {stream_desc} stream at {url}...")
                 connect_params = {"ping_interval": 20, "ping_timeout": 10}
                 async with websockets.connect(url, **connect_params) as ws:
                     logger.info(f"Successfully connected to {stream_desc} stream.")
-                    while True:
-                        try:
-                            message = await ws.recv()
-                            await self._process_message_single(message, stream_desc)
-                        except websockets.exceptions.ConnectionClosed as e:
-                            # C0301: 修正 - 換行
-                            logger.warning(
-                                f"{stream_desc} connection closed: {e}. Reconnecting..."
-                            )
-                            break # 跳出接收訊息迴圈，外層會重連
-                        except Exception as e:
-                            # C0301: 修正 - 換行
-                            logger.exception(
-                                f"Error receiving/processing {stream_desc} message: {e}"
-                            )
-                            await asyncio.sleep(1)
-
-            # W0718: Catching too general exception (Pylint warning - kept for resilience)
-            except Exception as e:
-                # C0301: 修正 - 換行
-                logger.error(
-                    f"Failed to connect to {stream_desc} stream: {e}. Retrying in 10 seconds..."
-                )
-                await asyncio.sleep(10) # 連線失敗，等待 10 秒重試
+                    while True: await self._process_message_single(await ws.recv(), stream_desc)
+            except websockets.exceptions.ConnectionClosed as e: logger.warning(f"{stream_desc} connection closed: {e}. Reconnecting...")
+            except asyncio.CancelledError: logger.info(f"{stream_desc} listener task cancelled."); break
+            except Exception as e: logger.error(f"Error in {stream_desc} listener: {e}. Retrying in 10s..."); await asyncio.sleep(10)
 
     async def run_websocket_listener(self):
-        """連接到 WebSocket Streams 並持續監聽/處理訊息"""
-        if not self.redis_client:
-            logger.error("Redis client not available. Cannot start listener.")
-            return
+        if not self.redis_client: return
+        spot_url = f"{BINANCE_SPOT_WS_BASE}/ws/!miniTicker@arr"
+        futures_url = f"{BINANCE_FUTURES_WS_BASE}/ws/!markPrice@arr@1s"
+        logger.info("Starting WebSocket listeners...")
+        # 把任務加到列表，方便 close 時取消
+        task1 = asyncio.create_task(self._listen_single_stream(spot_url, "Spot MiniTicker"), name="SpotListener")
+        task2 = asyncio.create_task(self._listen_single_stream(futures_url, "Futures MarkPrice"), name="FuturesListener")
+        self._websocket_listener_tasks.extend([task1, task2])
+        try:
+            await asyncio.gather(task1, task2) # 持續運行
+        except asyncio.CancelledError:
+            logger.info("WebSocket listeners gather cancelled.")
+        finally:
+             # 從列表中移除已完成的任務
+             self._websocket_listener_tasks = [t for t in self._websocket_listener_tasks if t not in (task1, task2)]
 
-        spot_stream_url = f"{BINANCE_SPOT_WS_BASE}/ws/!miniTicker@arr"
-        futures_stream_url = f"{BINANCE_FUTURES_WS_BASE}/ws/!markPrice@arr@1s"
-
-        # 異步地運行兩個 listener
-        # W0311: 修正縮排
-        task1 = asyncio.create_task(
-            self._listen_single_stream(spot_stream_url, "Spot MiniTicker")
-        )
-        # W0311: 修正縮排
-        task2 = asyncio.create_task(
-            self._listen_single_stream(futures_stream_url, "Futures MarkPrice")
-        )
-
-        logger.info("Starting WebSocket listeners for Spot and Futures streams...")
-        await asyncio.gather(task1, task2) # 同時運行兩個 listener
 
     async def start(self):
         """啟動服務"""
         await self._connect_redis()
-        if self.redis_client:
-            await self.run_websocket_listener() # 啟動 WebSocket 監聽
-        else:
-            logger.critical("Redis connection failed. Service cannot start.")
+        if not self.redis_client: raise ConnectionError("Redis connection failed. Service cannot start.")
+
+        self.http_session = aiohttp.ClientSession()
+        logger.info("HTTP session created.")
+        logger.info("Performing initial whitelist update...")
+        await self._update_whitelist()
+        logger.info("Initial whitelist update finished.")
+
+        # --- 簡化：只創建任務，讓它們在背景跑 ---
+        self._whitelist_update_task = asyncio.create_task(self._run_whitelist_updater(), name="WhitelistUpdater")
+        # WebSocket listener 會在 run_websocket_listener 內部創建並添加到 self._websocket_listener_tasks
+        await self.run_websocket_listener() # 直接 await 這個函數，它內部會 gather
 
     async def close(self):
-        """關閉 Redis 連線"""
+        """關閉服務"""
+        logger.info("Shutting down DataAggregatorService...")
+
+        # 1. 取消背景任務 (Updater + WS Listeners)
+        tasks_to_cancel = []
+        if self._whitelist_update_task and not self._whitelist_update_task.done():
+            tasks_to_cancel.append(self._whitelist_update_task)
+        tasks_to_cancel.extend([t for t in self._websocket_listener_tasks if not t.done()])
+
+        if tasks_to_cancel:
+             logger.info(f"Cancelling {len(tasks_to_cancel)} background tasks...")
+             for task in tasks_to_cancel:
+                 task.cancel()
+             # 等待取消完成，忽略 CancelledError
+             await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+             logger.info("Background tasks cancelled.")
+
+        # 2. 關閉 HTTP Session
+        if self.http_session and not self.http_session.closed:
+             await self.http_session.close()
+             logger.info("HTTP session closed.")
+
+        # 3. 關閉 Redis 連線
         if self.redis_client:
             await self.redis_client.aclose()
             logger.info("Redis connection closed.")
 
+        logger.info("DataAggregatorService shutdown complete.")
 
-# --- 主程式執行區塊 ---
 async def main():
     """主執行函數"""
-    # W0311: 修正縮排
-    service = DataAggregatorService(redis_url=REDIS_URL)
+    service = None
     try:
-        # W0311: 修正縮排
+        service = DataAggregatorService(redis_url=REDIS_URL)
         await service.start()
     except asyncio.CancelledError:
-        # W0311: 修正縮排
-        logger.info("Service cancellation requested.")
+        logger.info("Main service loop cancelled.")
+    except ConnectionError as e:
+         logger.critical(f"Service start failed: {e}")
     except Exception as e:
-        # W0311: 修正縮排
         logger.exception(f"Critical error in main service loop: {e}")
     finally:
-        # W0311: 修正縮排
-        logger.info("Shutting down service...")
-        if 'service' in locals() and service:
-            # W0311: 修正縮排
-            await service.close()
-        # W0311: 修正縮排
-        logger.info("Service shutdown complete.")
+        logger.info("Initiating service shutdown process...")
+        if service: await service.close()
 
-# E305: 兩個空行
-# E305: 兩個空行
 if __name__ == "__main__":
-    # W0311: 修正縮排
     try:
-        # W0311: 修正縮排
         asyncio.run(main())
     except KeyboardInterrupt:
-        # W0311: 修正縮排
         logger.info("Service stopped by user (KeyboardInterrupt).")
 
-# C0304/W292: 確保檔案結尾有空行
+# 確保檔案結尾有空行
